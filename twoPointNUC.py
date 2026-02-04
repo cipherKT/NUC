@@ -23,12 +23,10 @@ class SceneBasedTwoPointNUC:
             lo = np.percentile(values, self.lower_percentile)
             hi = np.percentile(values, self.upper_percentile)
 
-            trimmed = []
-            for v in values:
-                if v >= lo and v <= hi:
-                    trimmed.append(v)
+            # Vectorized trimming
+            mask = (values >= lo) & (values <= hi)
+            trimmed = values[mask]
 
-            trimmed = np.array(trimmed)
             if trimmed.size < values.size * 0.5:
                 continue
 
@@ -65,6 +63,7 @@ class SceneBasedTwoPointNUC:
         num_frames = len(frames)
         num_pixels = h * w
 
+        # Create matrix more efficiently
         matrix = np.zeros((num_pixels, num_frames), dtype=np.float32)
 
         for t in range(num_frames):
@@ -73,28 +72,17 @@ class SceneBasedTwoPointNUC:
             if frame.shape != (h, w):
                 raise ValueError("Frame size is not matching")
 
-            pixel_index = 0
-            for i in range(h):
-                for j in range(w):
-                    matrix[pixel_index, t] = frame[i, j]
-                    pixel_index += 1
+            # Flatten in row-major order (default for numpy)
+            matrix[:, t] = frame.flatten()
+
         return matrix
 
     def sort_matrix(self, matrix):
         if matrix.ndim != 2:
             raise ValueError("Input matrix is not 2D")
-        num_pixels, num_frames = matrix.shape
 
-        sorted_matrix = np.zeros_like(matrix)
-        for pixel_idx in range(num_pixels):
-            values = []
-
-            for t in range(num_frames):
-                values.append(matrix[pixel_idx, t])
-
-            values.sort()
-            for t in range(num_frames):
-                sorted_matrix[pixel_idx, t] = values[t]
+        # Sort each row (pixel's temporal values) efficiently
+        sorted_matrix = np.sort(matrix, axis=1)
 
         return sorted_matrix
 
@@ -127,17 +115,14 @@ class SceneBasedTwoPointNUC:
             raise RuntimeError("Estimate prior first")
 
         num_regions = len(regions)
-        # Stats calc
+
+        # Stats calculation - vectorized
         region_med = []
         region_stds = []
 
         for start, end in regions:
-            values = []
-
-            for p in range(sorted_matrix.shape[0]):
-                for t in range(start, end):
-                    values.append(sorted_matrix[p, t])
-            values = np.array(values)
+            # Get all values in this region
+            values = sorted_matrix[:, start:end].flatten()
 
             med = np.median(values)
             mad = np.median(np.abs(values - med))
@@ -145,18 +130,13 @@ class SceneBasedTwoPointNUC:
 
             region_med.append(med)
             region_stds.append(std)
+
         region_med = np.array(region_med)
         region_stds = np.array(region_stds)
 
-        # Deviation
-        deviations = []
-
-        for i in range(num_regions):
-            predicted_std = self.prior_slope * region_med[i]
-            deviation = abs(region_stds[i] - predicted_std)
-            deviations.append(deviation)
-
-        deviations = np.array(deviations)
+        # Deviation calculation
+        predicted_stds = self.prior_slope * region_med
+        deviations = np.abs(region_stds - predicted_stds)
 
         if min_mean_diff is None:
             dynamic_range = np.max(region_med) - np.min(region_med)
@@ -167,10 +147,7 @@ class SceneBasedTwoPointNUC:
         idx_high = None
 
         for i in range(num_regions):
-            for j in range(num_regions):
-                if i >= j:
-                    continue
-
+            for j in range(i + 1, num_regions):  # j > i
                 mean_diff = abs(region_med[j] - region_med[i])
                 if mean_diff < min_mean_diff:
                     continue
@@ -181,6 +158,7 @@ class SceneBasedTwoPointNUC:
                     best_score = score
                     idx_low = i
                     idx_high = j
+
         if idx_low is None:
             idx_low = int(np.argmin(region_med))
             idx_high = int(np.argmax(region_med))
@@ -193,67 +171,51 @@ class SceneBasedTwoPointNUC:
 
         num_pixels = sorted_matrix.shape[0]
 
-        values_i = []
-        values_j = []
+        # Calculate global mean values for the two regions
+        region_i_values = sorted_matrix[:, start_i:end_i]
+        region_j_values = sorted_matrix[:, start_j:end_j]
 
-        for p in range(num_pixels):
-            for t in range(start_i, end_i):
-                values_i.append(sorted_matrix[p, t])
-            for t in range(start_j, end_j):
-                values_j.append(sorted_matrix[p, t])
-        values_i = np.array(values_i)
-        values_j = np.array(values_j)
+        p_i = np.mean(region_i_values)
+        p_j = np.mean(region_j_values)
 
-        p_i = np.mean(values_i)
-        p_j = np.mean(values_j)
+        # Calculate per-pixel mean values
+        q_i = np.mean(region_i_values, axis=1)  # Shape: (num_pixels,)
+        q_j = np.mean(region_j_values, axis=1)  # Shape: (num_pixels,)
 
-        gain = np.zeros(num_pixels, dtype=np.float32)
+        # Calculate gain and offset
+        denominator = q_j - q_i
+
+        # Handle division by zero
+        gain = np.ones(num_pixels, dtype=np.float32)
         offset = np.zeros(num_pixels, dtype=np.float32)
 
-        for p in range(num_pixels):
-            sum_i = 0.0
-            count_i = 0
+        valid_mask = np.abs(denominator) >= eps
 
-            for t in range(start_i, end_i):
-                sum_i += sorted_matrix[p, t]
-                count_i += 1
-            sum_j = 0.0
-            count_j = 0
+        gain[valid_mask] = (p_j - p_i) / denominator[valid_mask]
+        offset[valid_mask] = p_i - gain[valid_mask] * q_i[valid_mask]
 
-            for t in range(start_j, end_j):
-                sum_j += sorted_matrix[p, t]
-                count_j += 1
-
-            q_i = sum_i / count_i
-            q_j = sum_j / count_j
-
-            denominator = q_j - q_i
-
-            if abs(denominator) < eps:
-                gain[p] = 1.0
-                offset[p] = 0.0
-            else:
-                gain[p] = (p_j - p_i) / denominator
-                offset[p] = p_i - gain[p] * q_i
         return gain, offset
 
     def apply_correction_and_store(self, frames, gain, offset, h, w):
+        """
+        Apply correction to frames using gain and offset vectors.
 
+        Args:
+            frames: List of frames to correct
+            gain: 1D array of gain coefficients (length = h*w)
+            offset: 1D array of offset coefficients (length = h*w)
+            h: Height of frames
+            w: Width of frames
+        """
         c_frames = []
-        num_pixels = h * w
 
-        for f in frames:
-            corrected = np.zeros((h, w), dtype=np.float32)
+        # Reshape gain and offset to 2D for broadcasting
+        gain_2d = gain.reshape(h, w)
+        offset_2d = offset.reshape(h, w)
 
-            p_idx = 0
-            for i in range(h):
-                for j in range(w):
-                    if p_idx >= num_pixels:
-                        continue
-
-                    corrected[i, j] = gain[p_idx] * f[i, j] + offset[p_idx]
-                    p_idx += 1
-
+        for frame in frames:
+            # Apply correction: corrected = gain * raw + offset
+            corrected = gain_2d * frame + offset_2d
             c_frames.append(corrected)
 
         self.corrected_frames = c_frames
