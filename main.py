@@ -14,7 +14,7 @@ def run_twopointnuc(data_path, output_path, show_frames=False):
     print(f"[*] Loaded {num_frames} frames ({h} x {w})")
 
     nuc = SceneBasedTwoPointNUC(
-        num_regions=10, lower_percentile=5, upper_percentile=95, min_valid_ratio=0.8
+        num_regions=20, lower_percentile=5, upper_percentile=95, min_valid_ratio=0.8
     )
 
     print("[*] Estimating pseudo-prior....")
@@ -33,7 +33,9 @@ def run_twopointnuc(data_path, output_path, show_frames=False):
     print(f"[-] Created {len(regions)} regions")
 
     print("[*] Selecting Optimal Regions....")
-    idx_l, idx_h = nuc.select_regions(sorted_matrix=sorted_matrix, regions=regions)
+    idx_l, idx_h = nuc.select_regions(
+        sorted_matrix=sorted_matrix, regions=regions, min_mean_diff=100
+    )
     print(f"[-] Selected regions: {idx_l},{idx_h}")
 
     print("[*] Estimating gain and offset....")

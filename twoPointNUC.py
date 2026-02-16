@@ -23,7 +23,6 @@ class SceneBasedTwoPointNUC:
             lo = np.percentile(values, self.lower_percentile)
             hi = np.percentile(values, self.upper_percentile)
 
-            # Vectorized trimming
             mask = (values >= lo) & (values <= hi)
             trimmed = values[mask]
 
@@ -141,6 +140,7 @@ class SceneBasedTwoPointNUC:
         if min_mean_diff is None:
             dynamic_range = np.max(region_med) - np.min(region_med)
             min_mean_diff = 0.2 * dynamic_range
+            print(min_mean_diff)
 
         best_score = None
         idx_low = None
