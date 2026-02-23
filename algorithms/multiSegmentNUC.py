@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 
 
@@ -8,21 +10,9 @@ class MultiSegmentNUC:
         lower_percentile: float = 5.0,
         upper_percentile: float = 95.0,
         min_valid_ratio: float = 0.8,
-        dv_tolerance: float = None,
+        dv_tolerance: Optional[float] = None,
     ):
-        """
-        Scene-based multi-segment NUC correction.
-        Based on: Li Dandan et al., IEEE Photonics Journal, 2024.
 
-        Args:
-            num_regions:      Number of uniform regions to partition sorted data into
-            lower_percentile: Lower percentile for trimming in prior estimation
-            upper_percentile: Upper percentile for trimming in prior estimation
-            min_valid_ratio:  Minimum ratio of valid frames required
-            dv_tolerance:     Tolerance for D_V difference when grouping regions
-                              into linear segments. If None, auto-computed as
-                              0.25% of the dynamic range of region means.
-        """
         self.num_regions = num_regions
         self.lower_percentile = lower_percentile
         self.upper_percentile = upper_percentile
@@ -34,16 +24,7 @@ class MultiSegmentNUC:
         self.corrected_frames = None
 
     def build_temporal_matrix(self, frames: list) -> np.ndarray:
-        """
-        Build a temporal matrix from frames.
 
-        Args:
-            frames: List of 2D float32 arrays of shape (H, W)
-
-        Returns:
-            matrix: np.ndarray of shape (H, W, num_frames)
-                    matrix[r] gives (W, num_frames) for detector row r
-        """
         if not frames or len(frames) == 0:
             raise RuntimeError("Please provide valid frames")
 
@@ -62,18 +43,7 @@ class MultiSegmentNUC:
         return matrix
 
     def sort_matrix(self, matrix: np.ndarray, trim_cols: int = 10) -> np.ndarray:
-        """
-        Sort each pixel's temporal values in ascending order and trim
-        saturated/bad pixel columns from both ends.
 
-        Args:
-            matrix:    np.ndarray of shape (H, W, num_frames)
-            trim_cols: Number of columns to discard from each end after
-                       sorting (default 10, as per paper). Set 0 to disable.
-
-        Returns:
-            sorted_matrix: np.ndarray of shape (H, W, num_frames - 2*trim_cols)
-        """
         if matrix.ndim != 3:
             raise ValueError(
                 f"Expected 3D matrix (H, W, num_frames), got shape {matrix.shape}"
@@ -98,16 +68,7 @@ class MultiSegmentNUC:
         return sorted_matrix
 
     def partition_regions(self, sorted_matrix: np.ndarray) -> list:
-        """
-        Partition the sorted temporal axis into N uniform regions.
 
-        Args:
-            sorted_matrix: np.ndarray of shape (H, W, num_frames)
-
-        Returns:
-            regions: List of (start, end) index tuples along the frames axis.
-                     Length = num_regions
-        """
         if sorted_matrix.ndim != 3:
             raise ValueError(
                 f"Expected 3D matrix (H, W, num_frames), got shape {sorted_matrix.shape}"
@@ -140,23 +101,7 @@ class MultiSegmentNUC:
         return regions
 
     def compute_region_means(self, sorted_matrix: np.ndarray, regions: list) -> tuple:
-        """
-        Compute global and per-row region means.
 
-        Args:
-            sorted_matrix: np.ndarray of shape (H, W, num_frames)
-            regions: List of (start, end) index tuples, length = num_regions
-
-        Returns:
-            T: np.ndarray of shape (num_regions,)
-               Global mean of each region across all rows and pixels.
-               Corresponds to Tn in the paper.
-
-            Q: np.ndarray of shape (H, num_regions)
-               Per-detector-row mean of each region.
-               Q[r, n] = mean of all pixels in row r within region n.
-               Corresponds to Qn(c) in the paper.
-        """
         if sorted_matrix.ndim != 3:
             raise ValueError(
                 f"Expected 3D matrix (H, W, num_frames), got shape {sorted_matrix.shape}"
@@ -180,19 +125,7 @@ class MultiSegmentNUC:
         return T, Q
 
     def identify_linear_segments(self, T: np.ndarray) -> list:
-        """
-        Identify linear segments of the S-curve by analyzing consecutive
-        differences between region means (D_V values).
 
-        Args:
-            T: np.ndarray of shape (num_regions,)
-               Global mean per region (Tn from paper)
-
-        Returns:
-            segments: List of lists, each inner list contains region indices
-                      belonging to the same linear segment.
-                      e.g. [[0,1,2], [3,4,5,6], [7,8,...,19]]
-        """
         if len(T) < 2:
             raise ValueError("Need at least 2 regions to identify segments")
 
@@ -255,19 +188,7 @@ class MultiSegmentNUC:
         return segments
 
     def select_region_pair_per_segment(self, segments: list) -> list:
-        """
-        For each linear segment, select dark and bright region indices
-        using Equation 6 from the paper.
 
-        Args:
-            segments: List of lists of region indices per segment
-                      e.g. [[0,1,2], [3,4,5,6,7], ...]
-
-        Returns:
-            pairs: List of (idx_low, idx_high) tuples — one per segment.
-                   These are actual region indices (into the regions list),
-                   not positions within the segment.
-        """
         pairs = []
 
         for seg in segments:
@@ -313,28 +234,7 @@ class MultiSegmentNUC:
         Q: np.ndarray,
         eps: float = 1e-6,
     ) -> list:
-        """
-        Estimate gain and offset per row for each linear segment
-        using Equation 7 from the paper.
 
-        Args:
-            sorted_matrix: np.ndarray of shape (H, W, num_frames)
-            regions:       List of (start, end) index tuples
-            segments:      List of lists of region indices per segment
-            pairs:         List of (idx_low, idx_high) per segment
-            T:             np.ndarray of shape (num_regions,) — global region means
-            Q:             np.ndarray of shape (H, num_regions) — per-row region means
-            eps:           Small value to avoid division by zero
-
-        Returns:
-            corrections: List of dicts, one per segment, each containing:
-                         {
-                           'gain':   np.ndarray of shape (H, W)
-                           'offset': np.ndarray of shape (H, W)
-                           'T_low':  float — global mean of dark reference region
-                           'T_high': float — global mean of bright reference region
-                         }
-        """
         H, W, _ = sorted_matrix.shape
 
         corrections = []
@@ -440,19 +340,7 @@ class MultiSegmentNUC:
         return corrections
 
     def apply_correction(self, frames: list, corrections: list, h: int, w: int) -> list:
-        """
-        Apply per-segment gain/offset correction to each frame.
-        Interpolates between the two nearest segments for each pixel.
 
-        Args:
-            frames:      List of raw 2D float32 arrays of shape (H, W)
-            corrections: List of dicts from estimate_gain_offset_per_segment
-            h:           Frame height
-            w:           Frame width
-
-        Returns:
-            corrected_frames: List of corrected 2D float32 arrays of shape (H, W)
-        """
         # Build segment anchor arrays
         T_lows = np.array([c["T_low"] for c in corrections], dtype=np.float32)
         T_highs = np.array([c["T_high"] for c in corrections], dtype=np.float32)
@@ -505,15 +393,7 @@ class MultiSegmentNUC:
         return corrected_frames
 
     def run(self, frames: list) -> list:
-        """
-        Orchestrate the full multi-segment NUC pipeline.
 
-        Args:
-            frames: List of 2D float32 arrays of shape (H, W)
-
-        Returns:
-            corrected_frames: List of corrected 2D float32 arrays of shape (H, W)
-        """
         if not frames or len(frames) == 0:
             raise RuntimeError("Please provide valid frames")
 
