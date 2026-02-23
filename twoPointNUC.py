@@ -197,16 +197,6 @@ class SceneBasedTwoPointNUC:
         return gain, offset
 
     def apply_correction_and_store(self, frames, gain, offset, h, w):
-        """
-        Apply correction to frames using gain and offset vectors.
-
-        Args:
-            frames: List of frames to correct
-            gain: 1D array of gain coefficients (length = h*w)
-            offset: 1D array of offset coefficients (length = h*w)
-            h: Height of frames
-            w: Width of frames
-        """
         c_frames = []
 
         # Reshape gain and offset to 2D for broadcasting
@@ -220,3 +210,54 @@ class SceneBasedTwoPointNUC:
 
         self.corrected_frames = c_frames
         return c_frames
+
+    def run(self, frames, min_mean_diff=None):
+        if not frames or len(frames) == 0:
+            raise RuntimeError("Please provide valid frames")
+
+        h, w = frames[0].shape
+
+        # Step 1 — Estimate prior slope
+        print("[*] Estimating pseudo-prior...")
+        prior = self.estimate_prior(frames=frames)
+        print(f"[-] Prior slope = {prior:.6f}")
+
+        # Step 2 — Build temporal matrix
+        print("[*] Building temporal matrix...")
+        matrix = self.build_temporal_matrix(frames=frames)
+        print(f"[-] Matrix shape: {matrix.shape}")
+
+        # Step 3 — Sort temporal matrix
+        print("[*] Sorting temporal matrix...")
+        sorted_matrix = self.sort_matrix(matrix=matrix)
+        print(f"[-] Sorted matrix shape: {sorted_matrix.shape}")
+
+        # Step 4 — Partition regions
+        print("[*] Partitioning regions...")
+        regions = self.partition_regions(sorted_matrix=sorted_matrix)
+        print(f"[-] Created {len(regions)} regions")
+
+        # Step 5 — Select optimal region pair
+        print("[*] Selecting optimal regions...")
+        idx_l, idx_h = self.select_regions(
+            sorted_matrix=sorted_matrix, regions=regions, min_mean_diff=min_mean_diff
+        )
+        print(f"[-] Selected regions: low={idx_l}, high={idx_h}")
+
+        # Step 6 — Estimate gain and offset
+        print("[*] Estimating gain and offset...")
+        gain, offset = self.estimate_gain_offset(
+            sorted_matrix=sorted_matrix, regions=regions, idx_low=idx_l, idx_high=idx_h
+        )
+        print(f"[-] Gain shape: {gain.shape}, Offset shape: {offset.shape}")
+        print(f"[-] Gain range:   [{gain.min():.4f}, {gain.max():.4f}]")
+        print(f"[-] Offset range: [{offset.min():.4f}, {offset.max():.4f}]")
+
+        # Step 7 — Apply correction
+        print("[*] Applying corrections...")
+        corrected_frames = self.apply_correction_and_store(
+            frames=frames, gain=gain, offset=offset, h=h, w=w
+        )
+        print(f"[-] Corrected {len(corrected_frames)} frames")
+
+        return corrected_frames
