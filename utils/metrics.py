@@ -14,3 +14,9 @@ def col_mad(frame):
 def row_mad(frame):
     row_mean = np.mean(frame, axis=1, keepdims=True)
     return np.mean(np.abs(frame - row_mean))
+
+
+def rnu(frame):
+    mu = np.mean(frame)
+    sigma = np.std(frame)
+    return sigma / mu

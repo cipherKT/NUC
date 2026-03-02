@@ -4,7 +4,11 @@ from sklearn.linear_model import HuberRegressor
 
 class SceneBasedTwoPointNUC:
     def __init__(
-        self, num_regions, lower_percentile, upper_percentile, min_valid_ratio
+        self,
+        num_regions,
+        lower_percentile,
+        upper_percentile,
+        min_valid_ratio,
     ):
         self.num_regions = num_regions
         self.lower_percentile = lower_percentile
@@ -13,6 +17,21 @@ class SceneBasedTwoPointNUC:
         self.prior_slope = None
         self.frames = None
         self.corrected_frames = None
+
+    def _validate_ratio(self, frame_ratio: float) -> float:
+        if frame_ratio <= 0 or frame_ratio > 1:
+            raise ValueError(f"frame_ratio must be in (0,1], got {frame_ratio}")
+        return frame_ratio
+
+    def _select_training_frames(self, frames: list, frame_ratio: float = 1.0) -> list:
+        if not frames:
+            raise RuntimeError("Please provide valid frames")
+        ratio = self._validate_ratio(frame_ratio)
+        total = len(frames)
+        k = max(2, int(round(ratio * total)))
+        k = min(k, total)
+
+        return frames[:k]
 
     def estimate_prior(self, frames):
         medians = []
@@ -51,22 +70,23 @@ class SceneBasedTwoPointNUC:
         self.prior_slope = model.coef_[0]
         return self.prior_slope
 
-    def build_temporal_matrix(self, frames):
+    def build_temporal_matrix(self, frames, frame_ratio: float = 1.0):
         if frames is None or len(frames) == 0:
             raise RuntimeError("Please provide valid frames")
-        self.frames = frames
+        training_frames = self._select_training_frames(frames, frame_ratio=frame_ratio)
+        self.frames = training_frames
 
-        first_frame = frames[0]
+        first_frame = training_frames[0]
         h, w = first_frame.shape
 
-        num_frames = len(frames)
+        num_frames = len(training_frames)
         num_pixels = h * w
 
         # Create matrix more efficiently
         matrix = np.zeros((num_pixels, num_frames), dtype=np.float32)
 
         for t in range(num_frames):
-            frame = frames[t]
+            frame = training_frames[t]
 
             if frame.shape != (h, w):
                 raise ValueError("Frame size is not matching")
@@ -211,20 +231,21 @@ class SceneBasedTwoPointNUC:
         self.corrected_frames = c_frames
         return c_frames
 
-    def run(self, frames, min_mean_diff=None):
+    def run(self, frames, min_mean_diff=None, frame_ratio: float = 1.0):
         if not frames or len(frames) == 0:
             raise RuntimeError("Please provide valid frames")
 
         h, w = frames[0].shape
+        training_frames = self._select_training_frames(frames, frame_ratio=frame_ratio)
 
         # Step 1 — Estimate prior slope
         print("[*] Estimating pseudo-prior...")
-        prior = self.estimate_prior(frames=frames)
+        prior = self.estimate_prior(frames=training_frames)
         print(f"[-] Prior slope = {prior:.6f}")
 
         # Step 2 — Build temporal matrix
         print("[*] Building temporal matrix...")
-        matrix = self.build_temporal_matrix(frames=frames)
+        matrix = self.build_temporal_matrix(frames=training_frames, frame_ratio=1.0)
         print(f"[-] Matrix shape: {matrix.shape}")
 
         # Step 3 — Sort temporal matrix
