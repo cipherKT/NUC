@@ -10,7 +10,31 @@ from algorithms import (
     StandardLMSSBNUC,
 )
 from data import DataSetHandler
+from optimal.cssbnuc import find_optimal_cssbnuc_params
+from optimal.lmssbnuc import find_optimal_lmssbnuc_params
+from optimal.multisegmentNUC import find_optimal_multisegment_num_regions
+from optimal.twopointNUC import find_optimal_training_frames
 from utils import Visualizer, col_mad, row_mad
+
+
+def _parse_csv_floats(raw, flag_name):
+    try:
+        values = tuple(float(x.strip()) for x in raw.split(",") if x.strip())
+    except ValueError as exc:
+        raise ValueError(f"Invalid float in {flag_name}: {raw}") from exc
+    if not values:
+        raise ValueError(f"{flag_name} must contain at least one value")
+    return values
+
+
+def _parse_csv_ints(raw, flag_name):
+    try:
+        values = tuple(int(x.strip()) for x in raw.split(",") if x.strip())
+    except ValueError as exc:
+        raise ValueError(f"Invalid int in {flag_name}: {raw}") from exc
+    if not values:
+        raise ValueError(f"{flag_name} must contain at least one value")
+    return values
 
 
 def run_twopointnuc(data_path, output_path, args, show_frames=False):
@@ -19,14 +43,48 @@ def run_twopointnuc(data_path, output_path, args, show_frames=False):
 
     num_frames, h, w = loader.get_shape()
     print(f"[*] Loaded {num_frames} frames ({h} x {w})")
-
-    nuc = SceneBasedTwoPointNUC(
-        num_regions=args.twopointnuc_num_regions,
-        lower_percentile=args.twopointnuc_lower_percentile,
-        upper_percentile=args.twopointnuc_upper_percentile,
-        min_valid_ratio=args.twopointnuc_min_valid_ratio,
-    )
-    c_frames = nuc.run(frames=frames)
+    if args.optimize:
+        ratio_candidates = (
+            args.opt_twopoint_ratios
+            if args.opt_twopoint_ratios is not None
+            else (1.0, 0.5, 0.25, 0.1)
+        )
+        region_candidates = (
+            args.opt_twopoint_regions
+            if args.opt_twopoint_regions is not None
+            else ((5, 10, 20) if args.optimize_fast else (5, 10, 15, 20, 25))
+        )
+        optimal_hp = find_optimal_training_frames(
+            frames=frames,
+            lower_percentile=args.twopointnuc_lower_percentile,
+            upper_percentile=args.twopointnuc_upper_percentile,
+            min_valid_ratio=args.twopointnuc_min_valid_ratio,
+            num_regions=region_candidates,
+            num_training_frames=ratio_candidates,
+        )
+        print(
+            "[*] Optimal TwoPointNUC hyperparameters: "
+            f"ratio={optimal_hp['best_ratio']:.2f} | "
+            f"k_frames={optimal_hp['best_k_frames']} | "
+            f"num_regions={optimal_hp['best_num_regions']} | "
+            f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+        )
+        nuc = SceneBasedTwoPointNUC(
+            num_regions=optimal_hp["best_num_regions"],
+            lower_percentile=args.twopointnuc_lower_percentile,
+            upper_percentile=args.twopointnuc_upper_percentile,
+            min_valid_ratio=args.twopointnuc_min_valid_ratio,
+        )
+        c_frames = nuc.run(frames=frames, frame_ratio=optimal_hp["best_ratio"])
+    else:
+        print("[*] Optimization disabled. Using CLI/default TwoPointNUC hyperparameters.")
+        nuc = SceneBasedTwoPointNUC(
+            num_regions=args.twopointnuc_num_regions,
+            lower_percentile=args.twopointnuc_lower_percentile,
+            upper_percentile=args.twopointnuc_upper_percentile,
+            min_valid_ratio=args.twopointnuc_min_valid_ratio,
+        )
+        c_frames = nuc.run(frames=frames, frame_ratio=1.0)
 
     print("[*] Saving corrected frames...")
     loader.save_corrected_frames(
@@ -51,13 +109,41 @@ def run_multisegmentnuc(data_path, output_path, args, show_frames=False):
     num_frames, h, w = loader.get_shape()
     print(f"[*] Loaded {num_frames} frames ({h} x {w})")
 
-    nuc = MultiSegmentNUC(
-        num_regions=args.multisegmentnuc_num_regions,
-        lower_percentile=args.multisegmentnuc_lower_percentile,
-        upper_percentile=args.multisegmentnuc_upper_percentile,
-        min_valid_ratio=args.multisegmentnuc_min_valid_ratio,
-        dv_tolerance=args.multisegmentnuc_dv_tolerance,
-    )
+    if args.optimize:
+        region_candidates = (
+            args.opt_multisegment_regions
+            if args.opt_multisegment_regions is not None
+            else ((10, 20, 30) if args.optimize_fast else (5, 10, 15, 20, 25, 30))
+        )
+        optimal_hp = find_optimal_multisegment_num_regions(
+            frames=frames,
+            lower_percentile=args.multisegmentnuc_lower_percentile,
+            upper_percentile=args.multisegmentnuc_upper_percentile,
+            min_valid_ratio=args.multisegmentnuc_min_valid_ratio,
+            dv_tolerance=args.multisegmentnuc_dv_tolerance,
+            num_region_candidates=region_candidates,
+        )
+        print(
+            "[*] Optimal MultiSegmentNUC hyperparameters: "
+            f"num_regions={optimal_hp['best_num_regions']} | "
+            f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+        )
+        nuc = MultiSegmentNUC(
+            num_regions=optimal_hp["best_num_regions"],
+            lower_percentile=args.multisegmentnuc_lower_percentile,
+            upper_percentile=args.multisegmentnuc_upper_percentile,
+            min_valid_ratio=args.multisegmentnuc_min_valid_ratio,
+            dv_tolerance=args.multisegmentnuc_dv_tolerance,
+        )
+    else:
+        print("[*] Optimization disabled. Using CLI/default MultiSegmentNUC hyperparameters.")
+        nuc = MultiSegmentNUC(
+            num_regions=args.multisegmentnuc_num_regions,
+            lower_percentile=args.multisegmentnuc_lower_percentile,
+            upper_percentile=args.multisegmentnuc_upper_percentile,
+            min_valid_ratio=args.multisegmentnuc_min_valid_ratio,
+            dv_tolerance=args.multisegmentnuc_dv_tolerance,
+        )
     c_frames = nuc.run(frames=frames)
 
     print("[*] Saving corrected frames...")
@@ -83,11 +169,41 @@ def run_cssbnuc(data_path, output_path, args, show_frames=False):
     num_frames, h, w = loader.get_shape()
     print(f"[*] Loaded {num_frames} frames ({h} x {w})")
 
-    nuc = ConstantStatsNUC(
-        alpha=args.cssbnuc_alpha,
-        T=args.cssbnuc_T,
-        eps=args.cssbnuc_eps,
-    )
+    if args.optimize:
+        alpha_candidates = (
+            args.opt_css_alpha
+            if args.opt_css_alpha is not None
+            else ((0.95, 0.97, 0.99) if args.optimize_fast else (0.90, 0.95, 0.97, 0.99))
+        )
+        T_candidates = (
+            args.opt_css_T
+            if args.opt_css_T is not None
+            else ((0.002, 0.005, 0.01) if args.optimize_fast else (0.001, 0.002, 0.005, 0.01))
+        )
+        optimal_hp = find_optimal_cssbnuc_params(
+            frames=frames,
+            alpha_candidates=alpha_candidates,
+            T_candidates=T_candidates,
+            eps=args.cssbnuc_eps,
+        )
+        print(
+            "[*] Optimal ConstantStatsNUC hyperparameters: "
+            f"alpha={optimal_hp['best_alpha']:.4f} | "
+            f"T={optimal_hp['best_T']:.6f} | "
+            f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+        )
+        nuc = ConstantStatsNUC(
+            alpha=optimal_hp["best_alpha"],
+            T=optimal_hp["best_T"],
+            eps=args.cssbnuc_eps,
+        )
+    else:
+        print("[*] Optimization disabled. Using CLI/default ConstantStatsNUC hyperparameters.")
+        nuc = ConstantStatsNUC(
+            alpha=args.cssbnuc_alpha,
+            T=args.cssbnuc_T,
+            eps=args.cssbnuc_eps,
+        )
 
     # DataSetHandler returns raw float32 (0–65535), so normalize inside the algo
     c_frames = nuc.run(frames=frames, normalize=True)
@@ -131,31 +247,109 @@ def run_lmssbnuc(data_path, output_path, args, show_frames=False):
     frames = [f / 65535.0 for f in frames]
 
     variant = args.lmssbnuc_variant
-    if variant == "standard":
-        nuc = StandardLMSSBNUC(
-            epsilon=args.lmssbnuc_epsilon,
-            sigma=args.lmssbnuc_sigma,
-            kernel_size=args.lmssbnuc_kernel_size,
+    if args.optimize:
+        lms_epsilon_candidates = (
+            args.opt_lms_epsilon
+            if args.opt_lms_epsilon is not None
+            else ((0.03, 0.05) if args.optimize_fast else None)
         )
-    elif variant == "adaptive":
-        nuc = AdaptiveLMSSBNUC(
-            K=args.lmssbnuc_K,
-            M_scale=args.lmssbnuc_M_scale,
+        lms_K_candidates = (
+            args.opt_lms_K
+            if args.opt_lms_K is not None
+            else ((0.02, 0.05) if args.optimize_fast else None)
+        )
+        lms_M_scale_candidates = (
+            args.opt_lms_M_scale
+            if args.opt_lms_M_scale is not None
+            else ((0.5, 0.75) if args.optimize_fast else None)
+        )
+        lms_T_candidates = (
+            args.opt_lms_T
+            if args.opt_lms_T is not None
+            else ((0.002, 0.005) if args.optimize_fast else None)
+        )
+        optimal_hp = find_optimal_lmssbnuc_params(
+            frames=frames,
+            variant=variant,
             sigma=args.lmssbnuc_sigma,
             kernel_size=args.lmssbnuc_kernel_size,
             local_var_window=args.lmssbnuc_local_var_window,
+            epsilon_candidates=lms_epsilon_candidates,
+            K_candidates=lms_K_candidates,
+            M_scale_candidates=lms_M_scale_candidates,
+            T_candidates=lms_T_candidates,
         )
-    elif variant == "gated":
-        nuc = GatedAdaptiveLMSSBNUC(
-            K=args.lmssbnuc_K,
-            M_scale=args.lmssbnuc_M_scale,
-            sigma=args.lmssbnuc_sigma,
-            kernel_size=args.lmssbnuc_kernel_size,
-            local_var_window=args.lmssbnuc_local_var_window,
-            T=args.lmssbnuc_T,
-        )
+
+        if variant == "standard":
+            print(
+                "[*] Optimal LMS-SBNUC (standard): "
+                f"epsilon={optimal_hp['best_epsilon']:.6f} | "
+                f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+            )
+            nuc = StandardLMSSBNUC(
+                epsilon=optimal_hp["best_epsilon"],
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+            )
+        elif variant == "adaptive":
+            print(
+                "[*] Optimal LMS-SBNUC (adaptive): "
+                f"K={optimal_hp['best_K']:.6f} | "
+                f"M_scale={optimal_hp['best_M_scale']:.6f} | "
+                f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+            )
+            nuc = AdaptiveLMSSBNUC(
+                K=optimal_hp["best_K"],
+                M_scale=optimal_hp["best_M_scale"],
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+                local_var_window=args.lmssbnuc_local_var_window,
+            )
+        elif variant == "gated":
+            print(
+                "[*] Optimal LMS-SBNUC (gated): "
+                f"K={optimal_hp['best_K']:.6f} | "
+                f"M_scale={optimal_hp['best_M_scale']:.6f} | "
+                f"T={optimal_hp['best_T']:.6f} | "
+                f"mean_rnu={optimal_hp['best_mean_rnu']:.6f}"
+            )
+            nuc = GatedAdaptiveLMSSBNUC(
+                K=optimal_hp["best_K"],
+                M_scale=optimal_hp["best_M_scale"],
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+                local_var_window=args.lmssbnuc_local_var_window,
+                T=optimal_hp["best_T"],
+            )
+        else:
+            raise ValueError(f"Unknown lmssbnuc variant: {variant}")
     else:
-        raise ValueError(f"Unknown lmssbnuc variant: {variant}")
+        print("[*] Optimization disabled. Using CLI/default LMS-SBNUC hyperparameters.")
+        if variant == "standard":
+            nuc = StandardLMSSBNUC(
+                epsilon=args.lmssbnuc_epsilon,
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+            )
+        elif variant == "adaptive":
+            nuc = AdaptiveLMSSBNUC(
+                K=args.lmssbnuc_K,
+                M_scale=args.lmssbnuc_M_scale,
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+                local_var_window=args.lmssbnuc_local_var_window,
+            )
+        elif variant == "gated":
+            nuc = GatedAdaptiveLMSSBNUC(
+                K=args.lmssbnuc_K,
+                M_scale=args.lmssbnuc_M_scale,
+                sigma=args.lmssbnuc_sigma,
+                kernel_size=args.lmssbnuc_kernel_size,
+                local_var_window=args.lmssbnuc_local_var_window,
+                T=args.lmssbnuc_T,
+            )
+        else:
+            raise ValueError(f"Unknown lmssbnuc variant: {variant}")
 
     print(f"[*] Running LMS-SBNUC ({variant})...")
     c_frames = nuc.run(frames=frames)
@@ -244,6 +438,72 @@ def main():
         action="store_true",
         help="Display raw vs corrected frames using matplotlib",
     )
+    parser.add_argument(
+        "--no-optimize",
+        action="store_false",
+        dest="optimize",
+        help="Disable hyperparameter optimization and use provided/default parameters.",
+    )
+    parser.add_argument(
+        "--optimize-fast",
+        action="store_true",
+        help="Use smaller candidate grids for quicker optimization.",
+    )
+    parser.add_argument(
+        "--opt-twopoint-ratios",
+        type=str,
+        default=None,
+        help="Comma-separated frame-ratio candidates for TwoPoint optimization (e.g. 1.0,0.5,0.25,0.1).",
+    )
+    parser.add_argument(
+        "--opt-twopoint-regions",
+        type=str,
+        default=None,
+        help="Comma-separated num_regions candidates for TwoPoint optimization (e.g. 5,10,20,25).",
+    )
+    parser.add_argument(
+        "--opt-multisegment-regions",
+        type=str,
+        default=None,
+        help="Comma-separated num_regions candidates for MultiSegment optimization (e.g. 5,10,15,20,25,30).",
+    )
+    parser.add_argument(
+        "--opt-css-alpha",
+        type=str,
+        default=None,
+        help="Comma-separated alpha candidates for ConstantStats optimization.",
+    )
+    parser.add_argument(
+        "--opt-css-T",
+        type=str,
+        default=None,
+        help="Comma-separated T candidates for ConstantStats optimization.",
+    )
+    parser.add_argument(
+        "--opt-lms-epsilon",
+        type=str,
+        default=None,
+        help="Comma-separated epsilon candidates for LMS standard variant optimization.",
+    )
+    parser.add_argument(
+        "--opt-lms-K",
+        type=str,
+        default=None,
+        help="Comma-separated K candidates for LMS adaptive/gated optimization.",
+    )
+    parser.add_argument(
+        "--opt-lms-M-scale",
+        type=str,
+        default=None,
+        help="Comma-separated M_scale candidates for LMS adaptive/gated optimization.",
+    )
+    parser.add_argument(
+        "--opt-lms-T",
+        type=str,
+        default=None,
+        help="Comma-separated T candidates for LMS gated optimization.",
+    )
+    parser.set_defaults(optimize=True, optimize_fast=False)
 
     # ── CS-SBNUC hyperparameters ─────────────────────────────────────────────
     cs = parser.add_argument_group("cssbnuc hyperparameters")
@@ -399,6 +659,54 @@ def main():
     )
 
     args = parser.parse_args()
+    try:
+        args.opt_twopoint_ratios = (
+            _parse_csv_floats(args.opt_twopoint_ratios, "--opt-twopoint-ratios")
+            if args.opt_twopoint_ratios is not None
+            else None
+        )
+        args.opt_twopoint_regions = (
+            _parse_csv_ints(args.opt_twopoint_regions, "--opt-twopoint-regions")
+            if args.opt_twopoint_regions is not None
+            else None
+        )
+        args.opt_multisegment_regions = (
+            _parse_csv_ints(args.opt_multisegment_regions, "--opt-multisegment-regions")
+            if args.opt_multisegment_regions is not None
+            else None
+        )
+        args.opt_css_alpha = (
+            _parse_csv_floats(args.opt_css_alpha, "--opt-css-alpha")
+            if args.opt_css_alpha is not None
+            else None
+        )
+        args.opt_css_T = (
+            _parse_csv_floats(args.opt_css_T, "--opt-css-T")
+            if args.opt_css_T is not None
+            else None
+        )
+        args.opt_lms_epsilon = (
+            _parse_csv_floats(args.opt_lms_epsilon, "--opt-lms-epsilon")
+            if args.opt_lms_epsilon is not None
+            else None
+        )
+        args.opt_lms_K = (
+            _parse_csv_floats(args.opt_lms_K, "--opt-lms-K")
+            if args.opt_lms_K is not None
+            else None
+        )
+        args.opt_lms_M_scale = (
+            _parse_csv_floats(args.opt_lms_M_scale, "--opt-lms-M-scale")
+            if args.opt_lms_M_scale is not None
+            else None
+        )
+        args.opt_lms_T = (
+            _parse_csv_floats(args.opt_lms_T, "--opt-lms-T")
+            if args.opt_lms_T is not None
+            else None
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     # ── Cross-method validation ──────────────────────────────────────────────
     # All hyperparameter defaults are None so we can tell if the user actually
@@ -418,9 +726,7 @@ def main():
                 foreign_flags.append((flag, method))
 
     if foreign_flags:
-        lines = "\n".join(
-            f"  {flag}  (belongs to '{m}')" for flag, m in foreign_flags
-        )
+        lines = "\n".join(f"  {flag}  (belongs to '{m}')" for flag, m in foreign_flags)
         parser.error(
             f"You selected method '{args.method}' but passed flags for other methods:\n"
             + lines
