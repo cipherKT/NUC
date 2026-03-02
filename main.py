@@ -1,7 +1,14 @@
 import argparse
 import sys
 
-from algorithms import ConstantStatsNUC, MultiSegmentNUC, SceneBasedTwoPointNUC
+from algorithms import (
+    AdaptiveLMSSBNUC,
+    ConstantStatsNUC,
+    GatedAdaptiveLMSSBNUC,
+    MultiSegmentNUC,
+    SceneBasedTwoPointNUC,
+    StandardLMSSBNUC,
+)
 from data import DataSetHandler
 from utils import Visualizer, col_mad, row_mad
 
@@ -113,6 +120,71 @@ def run_cssbnuc(data_path, output_path, args, show_frames=False):
         )
 
 
+def run_lmssbnuc(data_path, output_path, args, show_frames=False):
+    loader = DataSetHandler(data_path, ext="png")
+    frames = loader.load()
+
+    num_frames, h, w = loader.get_shape()
+    print(f"[*] Loaded {num_frames} frames ({h} x {w})")
+
+    # Normalise from raw uint16 range to [0, 1]
+    frames = [f / 65535.0 for f in frames]
+
+    variant = args.lmssbnuc_variant
+    if variant == "standard":
+        nuc = StandardLMSSBNUC(
+            epsilon=args.lmssbnuc_epsilon,
+            sigma=args.lmssbnuc_sigma,
+            kernel_size=args.lmssbnuc_kernel_size,
+        )
+    elif variant == "adaptive":
+        nuc = AdaptiveLMSSBNUC(
+            K=args.lmssbnuc_K,
+            M_scale=args.lmssbnuc_M_scale,
+            sigma=args.lmssbnuc_sigma,
+            kernel_size=args.lmssbnuc_kernel_size,
+            local_var_window=args.lmssbnuc_local_var_window,
+        )
+    elif variant == "gated":
+        nuc = GatedAdaptiveLMSSBNUC(
+            K=args.lmssbnuc_K,
+            M_scale=args.lmssbnuc_M_scale,
+            sigma=args.lmssbnuc_sigma,
+            kernel_size=args.lmssbnuc_kernel_size,
+            local_var_window=args.lmssbnuc_local_var_window,
+            T=args.lmssbnuc_T,
+        )
+    else:
+        raise ValueError(f"Unknown lmssbnuc variant: {variant}")
+
+    print(f"[*] Running LMS-SBNUC ({variant})...")
+    c_frames = nuc.run(frames=frames)
+
+    last_raw = frames[-1]
+    last_corr = c_frames[-1]
+    print(
+        f"[-] Last frame column MAD — before: {col_mad(last_raw):.6f} | "
+        f"after: {col_mad(last_corr):.6f}"
+    )
+
+    print("[*] Saving corrected frames...")
+    loader.save_corrected_frames(
+        corrected_frames=c_frames,
+        output_dir=output_path,
+        lower_percentile=1,
+        upper_percentile=99,
+    )
+    print(f"[-] Output saved to: {output_path}")
+
+    if show_frames:
+        print("[*] Displaying raw vs corrected frames...")
+        Visualizer.show_raw_vs_corrected(
+            raw_frames=[f * 65535.0 for f in frames],
+            corrected_dir=output_path,
+            pause=0.03,
+        )
+
+
 # Real defaults for every method's hyperparameters.
 # Also used to detect which params belong to which method.
 METHOD_PARAMS = {
@@ -134,6 +206,16 @@ METHOD_PARAMS = {
         "multisegmentnuc_min_valid_ratio": 0.8,
         "multisegmentnuc_dv_tolerance": None,
     },
+    "lmssbnuc": {
+        "lmssbnuc_variant": "standard",
+        "lmssbnuc_epsilon": 0.05,
+        "lmssbnuc_K": 0.05,
+        "lmssbnuc_M_scale": 0.5,
+        "lmssbnuc_sigma": 5.0,
+        "lmssbnuc_kernel_size": 21,
+        "lmssbnuc_local_var_window": 5,
+        "lmssbnuc_T": 0.002,
+    },
 }
 
 
@@ -153,7 +235,7 @@ def main():
         "-m",
         "--method",
         required=True,
-        choices=["twopointnuc", "multisegmentnuc", "cssbnuc"],
+        choices=["twopointnuc", "multisegmentnuc", "cssbnuc", "lmssbnuc"],
         help="NUC method to use",
     )
     parser.add_argument(
@@ -256,6 +338,66 @@ def main():
         help="Segmentation tolerance for D_V steps (default: auto-computed from data)",
     )
 
+    # ── LMS-SBNUC hyperparameters ─────────────────────────────────────────────
+    lms = parser.add_argument_group("lmssbnuc hyperparameters")
+    lms.add_argument(
+        "--lmssbnuc-variant",
+        type=str,
+        default=None,
+        dest="lmssbnuc_variant",
+        choices=["standard", "adaptive", "gated"],
+        help="LMS-SBNUC variant to run (default: standard)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-epsilon",
+        type=float,
+        default=None,
+        dest="lmssbnuc_epsilon",
+        help="Fixed LMS learning rate used by the standard variant (default: 0.05)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-K",
+        type=float,
+        default=None,
+        dest="lmssbnuc_K",
+        help="Base learning rate numerator for adaptive/gated variants (default: 0.05)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-M-scale",
+        type=float,
+        default=None,
+        dest="lmssbnuc_M_scale",
+        help="Local variance scale factor for adaptive/gated variants (default: 0.5)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-sigma",
+        type=float,
+        default=None,
+        dest="lmssbnuc_sigma",
+        help="Gaussian blur sigma for the reference image (default: 5.0)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-kernel-size",
+        type=int,
+        default=None,
+        dest="lmssbnuc_kernel_size",
+        help="Informational kernel extent (default: 21)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-local-var-window",
+        type=int,
+        default=None,
+        dest="lmssbnuc_local_var_window",
+        help="Window size for local variance estimation in adaptive/gated variants (default: 5)",
+    )
+    lms.add_argument(
+        "--lmssbnuc-T",
+        type=float,
+        default=None,
+        dest="lmssbnuc_T",
+        help="Change-detection threshold for the gated variant (default: 0.002)",
+    )
+
     args = parser.parse_args()
 
     # ── Cross-method validation ──────────────────────────────────────────────
@@ -293,6 +435,7 @@ def main():
         "twopointnuc": run_twopointnuc,
         "multisegmentnuc": run_multisegmentnuc,
         "cssbnuc": run_cssbnuc,
+        "lmssbnuc": run_lmssbnuc,
     }
 
     runner = dispatch.get(args.method)
