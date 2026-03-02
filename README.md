@@ -34,7 +34,7 @@ This repository provides implementations of multiple Scene-Based Non-Uniformity 
 ## 1. Clone
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/cipherKT/NUC.git
 cd implementations
 ```
 
