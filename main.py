@@ -10,10 +10,12 @@ from algorithms import (
     StandardLMSSBNUC,
 )
 from data import DataSetHandler
-from optimal.cssbnuc import find_optimal_cssbnuc_params
-from optimal.lmssbnuc import find_optimal_lmssbnuc_params
-from optimal.multisegmentNUC import find_optimal_multisegment_num_regions
-from optimal.twopointNUC import find_optimal_training_frames
+from optimal import (
+    find_optimal_cssbnuc_params,
+    find_optimal_lmssbnuc_params,
+    find_optimal_multisegment_num_regions,
+    find_optimal_training_frames,
+)
 from utils import Visualizer, col_mad, row_mad
 
 
@@ -77,7 +79,9 @@ def run_twopointnuc(data_path, output_path, args, show_frames=False):
         )
         c_frames = nuc.run(frames=frames, frame_ratio=optimal_hp["best_ratio"])
     else:
-        print("[*] Optimization disabled. Using CLI/default TwoPointNUC hyperparameters.")
+        print(
+            "[*] Optimization disabled. Using CLI/default TwoPointNUC hyperparameters."
+        )
         nuc = SceneBasedTwoPointNUC(
             num_regions=args.twopointnuc_num_regions,
             lower_percentile=args.twopointnuc_lower_percentile,
@@ -136,7 +140,9 @@ def run_multisegmentnuc(data_path, output_path, args, show_frames=False):
             dv_tolerance=args.multisegmentnuc_dv_tolerance,
         )
     else:
-        print("[*] Optimization disabled. Using CLI/default MultiSegmentNUC hyperparameters.")
+        print(
+            "[*] Optimization disabled. Using CLI/default MultiSegmentNUC hyperparameters."
+        )
         nuc = MultiSegmentNUC(
             num_regions=args.multisegmentnuc_num_regions,
             lower_percentile=args.multisegmentnuc_lower_percentile,
@@ -173,12 +179,18 @@ def run_cssbnuc(data_path, output_path, args, show_frames=False):
         alpha_candidates = (
             args.opt_css_alpha
             if args.opt_css_alpha is not None
-            else ((0.95, 0.97, 0.99) if args.optimize_fast else (0.90, 0.95, 0.97, 0.99))
+            else (
+                (0.95, 0.97, 0.99) if args.optimize_fast else (0.90, 0.95, 0.97, 0.99)
+            )
         )
         T_candidates = (
             args.opt_css_T
             if args.opt_css_T is not None
-            else ((0.002, 0.005, 0.01) if args.optimize_fast else (0.001, 0.002, 0.005, 0.01))
+            else (
+                (0.002, 0.005, 0.01)
+                if args.optimize_fast
+                else (0.001, 0.002, 0.005, 0.01)
+            )
         )
         optimal_hp = find_optimal_cssbnuc_params(
             frames=frames,
@@ -198,7 +210,9 @@ def run_cssbnuc(data_path, output_path, args, show_frames=False):
             eps=args.cssbnuc_eps,
         )
     else:
-        print("[*] Optimization disabled. Using CLI/default ConstantStatsNUC hyperparameters.")
+        print(
+            "[*] Optimization disabled. Using CLI/default ConstantStatsNUC hyperparameters."
+        )
         nuc = ConstantStatsNUC(
             alpha=args.cssbnuc_alpha,
             T=args.cssbnuc_T,
